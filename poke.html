@@ -571,14 +571,14 @@
                 },
                 capsule: {
                     hasDetails: true, 
-                    matProps: { metallic: 0.3, roughness: 0.15, envIntensity: 1.0 },
+                    matProps: { metallic: 0.3, roughness: 0.15, envIntensity: 1.2 },
                     generate: (scene, resources) => {
                         return {
                             texture: resources.pokeballTexture,
                             metadata: { type: 'POKE' }
                         };
                     },
-                    exitMat: { metallic: 0.8, roughness: 0.2, envIntensity: 1.3 }
+                    exitMat: { metallic: 0.8, roughness: 0.2, envIntensity: 3.0 }
                 }
             }
         };
@@ -590,7 +590,6 @@
                 this.masterGain.gain.value = 0.5;
                 this.masterGain.connect(this.ctx.destination);
                 
-                // Audio compressor logic kept same
                 const compressor = this.ctx.createDynamicsCompressor();
                 compressor.threshold.setValueAtTime(-24, this.ctx.currentTime);
                 compressor.knee.setValueAtTime(30, this.ctx.currentTime);
@@ -643,24 +642,83 @@
                 const now = this.ctx.currentTime;
                 const clicks = 8; 
                 const totalDuration = 1.0; 
+                
                 for (let i = 0; i < clicks; i++) {
                     const t = now + (i * (totalDuration / clicks));
-                    this.playOsc('triangle', 400, t - now, 0.1, 0.25); // Simplified
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    
+                    osc.type = 'triangle'; 
+                    osc.frequency.setValueAtTime(400, t);
+                    osc.frequency.exponentialRampToValueAtTime(800, t + 0.05);
+                    
+                    gain.gain.setValueAtTime(0, t);
+                    gain.gain.linearRampToValueAtTime(0.25, t + 0.01); 
+                    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+                    
+                    osc.connect(gain);
+                    gain.connect(this.masterGain);
+                    
+                    osc.start(t);
+                    osc.stop(t + 0.15);
                 }
             }
 
             playOpenSound() {
                 const t = this.ctx.currentTime;
-                this.playOsc('triangle', 150, 0, 0.3, 0.8);
+                const thudOsc = this.ctx.createOscillator();
+                const thudGain = this.ctx.createGain();
+                thudOsc.frequency.setValueAtTime(150, t);
+                thudOsc.frequency.exponentialRampToValueAtTime(40, t + 0.2);
+                thudGain.gain.setValueAtTime(0.8, t);
+                thudGain.gain.exponentialRampToValueAtTime(0.01, t + 0.3);
+                thudOsc.connect(thudGain);
+                thudGain.connect(this.masterGain);
+                thudOsc.start(t);
+                thudOsc.stop(t + 0.3);
                 this.playOsc('triangle', 2000, 0.1, 0.1, 0.1);
             }
 
             playWinSound() {
                 const t = this.ctx.currentTime;
+                const delay = this.ctx.createDelay();
+                delay.delayTime.value = 0.3;
+                const delayFeedback = this.ctx.createGain();
+                delayFeedback.gain.value = 0.4;
+                const delayMerge = this.ctx.createGain();
+                delay.connect(delayFeedback);
+                delayFeedback.connect(delay);
+                delay.connect(delayMerge);
+                delayMerge.connect(this.masterGain);
+                delayMerge.connect(this.masterGain);
+
                 [261.63, 329.63, 392.00, 523.25].forEach((freq, i) => {
-                    this.playOsc(i%2===0?'triangle':'sine', freq, i*0.1, 2.0, 0.12);
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = i % 2 === 0 ? 'triangle' : 'sine';
+                    osc.frequency.value = freq;
+                    const start = t + i * 0.1;
+                    const dur = 2.0;
+                    gain.gain.setValueAtTime(0, start);
+                    gain.gain.linearRampToValueAtTime(0.12, start + 0.1); 
+                    gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
+                    osc.connect(gain);
+                    gain.connect(this.masterGain);
+                    gain.connect(delay);
+                    osc.start(start);
+                    osc.stop(start + dur);
                 });
-                this.playOsc('sine', 130, 0, 1.0, 0.3);
+                
+                const subOsc = this.ctx.createOscillator();
+                const subGain = this.ctx.createGain();
+                subOsc.frequency.setValueAtTime(130, t);
+                subOsc.frequency.exponentialRampToValueAtTime(65, t + 1.0);
+                subGain.gain.setValueAtTime(0.3, t); 
+                subGain.gain.linearRampToValueAtTime(0, t + 1.0);
+                subOsc.connect(subGain);
+                subGain.connect(this.masterGain);
+                subOsc.start(t);
+                subOsc.stop(t + 1.0);
             }
             
             playTone(freq, type, duration) {
@@ -676,6 +734,7 @@
                 this.assetsManager = null;
                 this.audio = new GameAudio();
                 
+                // ★★★ Default Mode: POKEMON (Fixed) ★★★
                 this.currentMode = 'POKEMON'; 
                 
                 this.history = new Set();
@@ -685,13 +744,18 @@
                 this.materials = {};
                 
                 this.knob = null; 
+                this.knobMesh = null; 
                 this.pokeballTexture = null;
                 this.tempCapsule = null; 
+                this.glowLayer = null;
                 this.shadowGen = null;
                 this.chuteDoor = null; 
                 this.chuteLight = null; 
                 
                 this.chuteParticles = null; 
+                
+                this.leftLight = null;
+                this.rightLight = null;
                 this.orbitLights = [];
                 this.pendingRewardImage = null;
 
@@ -702,41 +766,18 @@
 
                 this.envUrl = "https://assets.babylonjs.com/environments/studio.hdr";
                 this.flareUrl = "https://www.babylonjs-playground.com/textures/flare.png";
-
-                // ★★★ OPTIMIZATION 1: DETECT WEAK DEVICES ★★★
-                // Simple heuristic: Mobile or smaller screens usually struggle with full PBR+PostProcess
-                this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 1000;
                 
                 window.game = this;
                 this.init();
             }
 
             async init() {
-                // Keep engine creation strict for performance
-                const options = {
-                    preserveDrawingBuffer: false,
-                    stencil: false,
-                    antialias: false // Disable default AA, we use pipeline or scaling
-                };
-
                 if (navigator.gpu && BABYLON.WebGPUEngine.IsSupportedAsync) {
-                     this.engine = new BABYLON.WebGPUEngine(this.canvas, options);
+                     this.engine = new BABYLON.WebGPUEngine(this.canvas);
                      await this.engine.initAsync();
                 } else {
-                    this.engine = new BABYLON.Engine(this.canvas, true, options);
+                    this.engine = new BABYLON.Engine(this.canvas, true);
                 }
-
-                // ★★★ OPTIMIZATION 2: HARDWARE SCALING ★★★
-                // On Retina/HighDPI, rendering 1:1 is too heavy. 
-                // Scaling level > 1 reduces internal resolution.
-                // 1.5 means internal resolution is 1/1.5 (approx 66%) of screen pixels.
-                // For mobile, this saves massive GPU power with minimal visual loss.
-                if (this.isMobile) {
-                    this.engine.setHardwareScalingLevel(window.devicePixelRatio > 1 ? 1.5 : 1.0);
-                } else {
-                    this.engine.setHardwareScalingLevel(1.0);
-                }
-
                 this.setupBasicScene();
                 this.loadAssets();
                 window.addEventListener("resize", () => this.engine.resize());
@@ -746,11 +787,10 @@
                 this.scene = new BABYLON.Scene(this.engine);
                 this.scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);
                 
-                // Optimize Physics: Use wider broadphase if possible, but default is usually fine
                 const gravityVector = new BABYLON.Vector3(0, -20, 0);
                 const physicsPlugin = new BABYLON.CannonJSPlugin(false); 
                 this.scene.enablePhysics(gravityVector, physicsPlugin);
-                physicsPlugin.setTimeStep(1/60); // Keep 60hz physics
+                physicsPlugin.setTimeStep(1/60);
 
                 const camera = new BABYLON.ArcRotateCamera("camera", -Math.PI / 2, Math.PI / 2.1, 32, new BABYLON.Vector3(0, 4, 0), this.scene);
                 camera.fovMode = BABYLON.Camera.FOVMODE_VERTICAL_FIXED; 
@@ -761,25 +801,24 @@
                     const isPortrait = window.innerHeight > window.innerWidth;
                     camera.radius = isPortrait ? 40 : 32;
                 };
+
                 adjustCameraRadius();
                 window.addEventListener("resize", adjustCameraRadius);
 
                 const hemiLight = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), this.scene);
-                hemiLight.intensity = 1.0;
+                hemiLight.intensity = 1.2;
+                hemiLight.groundColor = new BABYLON.Color3(0.1, 0.1, 0.1);
                 hemiLight.diffuse = new BABYLON.Color3(0.4, 0.3, 0.8); 
                 hemiLight.groundColor = new BABYLON.Color3(0.1, 0.0, 0.2);
 
                 this.spotLight = new BABYLON.SpotLight("spot", new BABYLON.Vector3(0, 20, 0), new BABYLON.Vector3(0, -1, 0), Math.PI/3, 2, this.scene);
-                this.spotLight.intensity = 5.0;
+                this.spotLight.intensity = 6.0;
                 this.spotLight.diffuse = new BABYLON.Color3(0.6, 0.4, 1.0);
-                
-                // ★★★ OPTIMIZATION 3: SHADOWS ★★★
-                // Reduce shadow map size on mobile (1024 -> 512)
-                // Use PercentageCloserFiltering (Fast & Good looking) instead of BlurExponential (Expensive)
-                const shadowSize = this.isMobile ? 512 : 1024;
-                this.shadowGen = new BABYLON.ShadowGenerator(shadowSize, this.spotLight);
-                this.shadowGen.usePercentageCloserFiltering = true; // Better performance on WebGL2
-                this.shadowGen.filteringQuality = BABYLON.ShadowGenerator.QUALITY_LOW;
+
+                const frontLight = new BABYLON.DirectionalLight("frontLight", new BABYLON.Vector3(0.2, -0.2, 1), this.scene);
+                frontLight.intensity = 0.5;
+                this.shadowGen = new BABYLON.ShadowGenerator(1024, this.spotLight);
+                this.shadowGen.useBlurExponentialShadowMap = true;
             }
 
             loadAssets() {
@@ -787,16 +826,14 @@
                 const loadingBar = document.getElementById("loadingBar");
                 const loadingText = document.getElementById("loadingStatus");
                 const loadingPercent = document.getElementById("loadingPercent");
-                
-                // Only load flare texture
-                this.assetsManager.addTextureTask("flareTask", this.flareUrl);
+                const flareTask = this.assetsManager.addTextureTask("flareTask", this.flareUrl);
 
                 this.assetsManager.onProgress = (remainingCount, totalCount, lastFinishedTask) => {
                     const loaded = totalCount - remainingCount;
                     const percent = Math.floor((loaded / totalCount) * 100);
                     loadingBar.style.width = `${percent}%`;
                     loadingPercent.innerText = `${percent}%`;
-                    loadingText.innerText = `載入資源...`;
+                    loadingText.innerText = `載入資源: ${lastFinishedTask.name}`;
                 };
 
                 this.assetsManager.onFinish = (tasks) => {
@@ -812,7 +849,7 @@
                 const envUrl = "https://playground.babylonjs.com/textures/environment.env";
                 const envTexture = new BABYLON.CubeTexture(envUrl, this.scene);
                 this.scene.environmentTexture = envTexture;
-                this.scene.environmentIntensity = 0.9;
+                this.scene.environmentIntensity = 2.0;
                 this.processLoadedAssets();
             }
 
@@ -840,41 +877,25 @@
             setupPipeline() {
                 const camera = this.scene.getCameraByName("camera");
                 const pipeline = new BABYLON.DefaultRenderingPipeline("pipeline", true, this.scene, [camera]);
-                
-                // ★★★ OPTIMIZATION 4: PIPELINE TUNING ★★★
-                // Glow/Bloom is CHEAP if configured right.
-                // Grain/Aberration are EXPENSIVE on mobile.
-                
                 pipeline.bloomEnabled = true;
-                pipeline.bloomThreshold = 0.7; // Raise threshold so fewer things glow (faster)
-                pipeline.bloomWeight = 0.7;
-                pipeline.bloomKernel = 64; 
-                pipeline.bloomScale = 0.5; // Render bloom at half resolution
-                
-                if (!this.isMobile) {
-                    // Only enable expensive effects on desktop/high-end
-                    pipeline.chromaticAberrationEnabled = true;
-                    pipeline.chromaticAberration.aberrationAmount = 8; 
-                    pipeline.chromaticAberration.radialIntensity = 0.5;
-                    
-                    pipeline.grainEnabled = true;
-                    pipeline.grain.intensity = 4;
-                    pipeline.grain.animated = true;
-                    
-                    pipeline.samples = 4; // MSAA
-                    pipeline.fxaaEnabled = true; 
-                } else {
-                    // Mobile: Disable expensive effects, rely on FXAA only
-                    pipeline.chromaticAberrationEnabled = false;
-                    pipeline.grainEnabled = false;
-                    pipeline.samples = 1; // Disable MSAA, use FXAA
-                    pipeline.fxaaEnabled = true; 
-                }
-
+                pipeline.bloomThreshold = 0.6;
+                pipeline.bloomWeight = 1.0;
+                pipeline.bloomKernel = 64;
+                pipeline.bloomScale = 0.5;
+                pipeline.glowLayerEnabled = true;
+                pipeline.glowLayer.intensity = 0.5;
+                pipeline.chromaticAberrationEnabled = true;
+                pipeline.chromaticAberration.aberrationAmount = 8; 
+                pipeline.chromaticAberration.radialIntensity = 0.5;
+                pipeline.grainEnabled = true;
+                pipeline.grain.intensity = 4;
+                pipeline.grain.animated = true;
                 pipeline.imageProcessingEnabled = true;
                 pipeline.imageProcessing.toneMappingEnabled = true;
                 pipeline.imageProcessing.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
-                pipeline.imageProcessing.exposure = 1.0; 
+                pipeline.imageProcessing.exposure = 0.4; 
+                pipeline.fxaaEnabled = true; 
+                pipeline.samples = 4;
             }
 
             startRenderLoop() {
@@ -890,16 +911,32 @@
                 const time = performance.now() * 0.001;
 
                 if (this.titleAnchor && this.scene.activeCamera) {
-                    // Title positioning logic
                     const engine = this.engine;
                     const camera = this.scene.activeCamera;
                     const viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
 
-                    const screenPos = BABYLON.Vector3.Project(this.titleAnchor.getAbsolutePosition(), BABYLON.Matrix.Identity(), this.scene.getTransformMatrix(), viewport);
-                    const screenLeft = BABYLON.Vector3.Project(this.titleLeft.getAbsolutePosition(), BABYLON.Matrix.Identity(), this.scene.getTransformMatrix(), viewport);
-                    const screenRight = BABYLON.Vector3.Project(this.titleRight.getAbsolutePosition(), BABYLON.Matrix.Identity(), this.scene.getTransformMatrix(), viewport);
+                    const screenPos = BABYLON.Vector3.Project(
+                        this.titleAnchor.getAbsolutePosition(),
+                        BABYLON.Matrix.Identity(),
+                        this.scene.getTransformMatrix(),
+                        viewport
+                    );
+
+                    const screenLeft = BABYLON.Vector3.Project(
+                        this.titleLeft.getAbsolutePosition(),
+                        BABYLON.Matrix.Identity(),
+                        this.scene.getTransformMatrix(),
+                        viewport
+                    );
+                    const screenRight = BABYLON.Vector3.Project(
+                        this.titleRight.getAbsolutePosition(),
+                        BABYLON.Matrix.Identity(),
+                        this.scene.getTransformMatrix(),
+                        viewport
+                    );
 
                     const projectedWidth = Math.abs(screenRight.x - screenLeft.x);
+
                     const titleEl = document.querySelector('.title-container');
                     if (titleEl) {
                         titleEl.style.left = `${screenPos.x}px`;
@@ -909,36 +946,41 @@
                 }
 
                 if (this.materials.neon) {
-                    // Simplify math
                     const intensity = 3.0;
-                    this.materials.neon.emissiveColor.set(
-                        (Math.sin(time) * 0.5 + 0.5) * intensity,
-                        (Math.sin(time + 2) * 0.5 + 0.5) * intensity,
-                        (Math.sin(time + 4) * 0.5 + 0.5) * intensity
-                    );
+                    const r = (Math.sin(time) * 0.5 + 0.5) * intensity;
+                    const g = (Math.sin(time + 2) * 0.5 + 0.5) * intensity;
+                    const b = (Math.sin(time + 4) * 0.5 + 0.5) * intensity;
+                    this.materials.neon.emissiveColor.set(r, g, b);
                 }
 
-                if (this.leftLight) this.leftLight.intensity = (1.2 + Math.sin(time * 3)) * 3.0;
-                if (this.rightLight) this.rightLight.intensity = (1.2 + Math.sin(time * 2.5 + 2)) * 3.0;
+                const leftPulse = 1.2 + Math.sin(time * 3) * 1.0; 
+                if (this.leftLight) this.leftLight.intensity = leftPulse * 3.0;
+
+                const rightPulse = 1.2 + Math.sin(time * 2.5 + 2) * 1.0;
+                if (this.rightLight) this.rightLight.intensity = rightPulse * 3.0;
                 
                 if (this.orbitLights.length > 0) {
-                    const lLen = this.orbitLights.length;
-                    for(let i=0; i<lLen; i++) {
-                        const light = this.orbitLights[i];
+                    this.orbitLights.forEach(light => {
                         const data = light.orbitData;
                         data.angle += data.speed * 0.01; 
                         light.position.x = Math.cos(data.angle) * data.radius;
                         light.position.z = Math.sin(data.angle) * data.radius;
-                        // Reduce unnecessary property updates
-                        if (i % 2 === 0) light.position.y = data.baseY + Math.sin(time * 0.5 + data.pulseOffset) * 2;
+                        light.position.y = data.baseY + Math.sin(time * 0.5 + data.pulseOffset) * 2;
                         light.intensity = 2.5 + Math.sin(time * data.pulseSpeed + data.pulseOffset) * 1.0;
-                    }
+                    });
                 }
 
                 if (this.materials.knobGold) {
-                    this.materials.knobGold.emissiveColor = !this.isSpinning 
-                        ? new BABYLON.Color3(0.02 + (Math.sin(time * 3) * 0.4 + 0.4), 0.01, 0)
-                        : new BABYLON.Color3(0.02, 0.01, 0);
+                    if (!this.isSpinning) {
+                        const glow = (Math.sin(time * 3) * 0.5 + 0.5) * 1.0; 
+                        this.materials.knobGold.emissiveColor = new BABYLON.Color3(
+                            0.02 + glow * 0.8, 
+                            0.01 + glow * 0.2, 
+                            0.0 + glow * 0.02
+                        );
+                    } else {
+                        this.materials.knobGold.emissiveColor = new BABYLON.Color3(0.02, 0.01, 0);
+                    }
                 }
 
                 if (this.scene.environmentTexture) {
@@ -947,20 +989,19 @@
             }
 
             createPokeballTexture() {
-                const tex = new BABYLON.DynamicTexture("pokeTex", {width:128, height:128}, this.scene); // Reduced texture size
+                const tex = new BABYLON.DynamicTexture("pokeTex", {width:256, height:256}, this.scene);
                 const ctx = tex.getContext();
-                ctx.fillStyle = "#D90429"; ctx.fillRect(0, 0, 128, 60);
-                ctx.fillStyle = "#F8F9FA"; ctx.fillRect(0, 68, 128, 60);
-                ctx.fillStyle = "#212529"; ctx.fillRect(0, 60, 128, 8);
+                ctx.fillStyle = "#D90429"; ctx.fillRect(0, 0, 256, 120);
+                ctx.fillStyle = "#F8F9FA"; ctx.fillRect(0, 136, 256, 120);
+                ctx.fillStyle = "#212529"; ctx.fillRect(0, 120, 256, 16);
                 tex.update();
                 return tex;
             }
 
             createNoiseTexture() {
-                // Reduced noise texture size 256->128
-                const tex = new BABYLON.DynamicTexture("noiseTex", {width:128, height:128}, this.scene);
+                const tex = new BABYLON.DynamicTexture("noiseTex", {width:256, height:256}, this.scene);
                 const ctx = tex.getContext();
-                const idata = ctx.createImageData(128, 128);
+                const idata = ctx.createImageData(256, 256);
                 const buffer32 = new Uint32Array(idata.data.buffer);
                 for (let i = 0; i < buffer32.length; i++) buffer32[i] = (Math.random() < 0.5) ? 0xff888888 : 0xffffffff;
                 ctx.putImageData(idata, 0, 0);
@@ -970,38 +1011,39 @@
 
             createMaterials() {
                 this.pokeballTexture = this.createPokeballTexture();
-                const noiseTex = this.createNoiseTexture();
 
                 const glass = new BABYLON.PBRMaterial("glass", this.scene);
-                glass.alpha = 0.15;
-                glass.metallic = 0.3; 
-                glass.roughness = 0.13;
-                // On mobile, refraction is expensive. Disable it or use alpha blending only.
-                if (!this.isMobile) {
-                    glass.subSurface.isRefractionEnabled = true;
-                    glass.subSurface.indexOfRefraction = 1.5; 
-                }
+                glass.alpha = 0.12;
+                glass.metallic = 0.9; 
+                glass.roughness = 0.12;
+                glass.subSurface.isRefractionEnabled = true;
+                glass.subSurface.indexOfRefraction = 1.52; 
+                glass.environmentIntensity = 0.8;
                 glass.albedoColor = new BABYLON.Color3(0.05, 0.05, 0.05); 
+                glass.reflectivityColor = new BABYLON.Color3(0.9, 0.9, 0.9);
                 this.materials.glass = glass;
 
                 const metalRed = new BABYLON.PBRMaterial("metalRed", this.scene);
-                metalRed.metallic = 0.4; metalRed.roughness = 0.25;
+                metalRed.metallic = 0.4; metalRed.roughness = 0.2;
                 metalRed.albedoColor = new BABYLON.Color3(0.6, 0.05, 0.1);
-                metalRed.bumpTexture = noiseTex;
+                metalRed.bumpTexture = this.createNoiseTexture();
                 metalRed.bumpTexture.level = 0.2;  
+                metalRed.environmentIntensity = 0.6; 
                 this.materials.body = metalRed;
 
                 const gold = new BABYLON.PBRMaterial("gold", this.scene);
-                gold.metallic = 0.3; gold.roughness = 0.2;
+                gold.metallic = 0.3; gold.roughness = 0.18;
                 gold.albedoColor = new BABYLON.Color3(1.0, 0.7, 0.2); 
-                gold.bumpTexture = noiseTex;
+                gold.bumpTexture = this.createNoiseTexture();
                 gold.bumpTexture.level = 0.1; 
+                gold.environmentIntensity = 1.0; 
                 this.materials.gold = gold;
 
                 const knobGold = new BABYLON.PBRMaterial("knobGold", this.scene);
-                knobGold.metallic = 0.6; knobGold.roughness = 0.2;
+                knobGold.metallic = 0.6; knobGold.roughness = 0.15;
                 knobGold.albedoColor = new BABYLON.Color3(1.0, 0.7, 0.2); 
-                knobGold.bumpTexture = noiseTex;
+                knobGold.bumpTexture = this.createNoiseTexture();
+                knobGold.environmentIntensity = 0.5;
                 this.materials.knobGold = knobGold;
 
                 const neon = new BABYLON.StandardMaterial("neon", this.scene);
@@ -1012,32 +1054,44 @@
 
             buildMachine(shadowGen) {
                 const baseHeight = 20; const baseY = -10;
-                // Use simplified geometry logic
-                const base = BABYLON.MeshBuilder.CreateBox("base", {width: 12, height: baseHeight, depth: 12}, this.scene);
-                base.position.y = baseY;
-                base.material = this.materials.body;
+                const baseOriginal = BABYLON.MeshBuilder.CreateBox("baseOrig", {width: 12, height: baseHeight, depth: 12}, this.scene);
+                baseOriginal.position.y = baseY;
+                const holeBox = BABYLON.MeshBuilder.CreateBox("holeBox", {width: 3.5, height: 3.5, depth: 2}, this.scene);
+                holeBox.position.y = -6.2; holeBox.position.z = -6;
+                const baseCSG = BABYLON.CSG.FromMesh(baseOriginal);
+                const holeCSG = BABYLON.CSG.FromMesh(holeBox);
+                const base = baseCSG.subtract(holeCSG).toMesh("base", this.materials.body, this.scene);
                 base.receiveShadows = true;
-                // Use BoxImpostor (Fastest)
                 base.physicsImpostor = new BABYLON.PhysicsImpostor(base, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0, restitution: 0.1 }, this.scene);
+                baseOriginal.dispose(); holeBox.dispose();
 
-                // Simply create the glass box without walls array (Optimization)
+                const innerChamber = BABYLON.MeshBuilder.CreateBox("innerChamber", {width: 3.4, height: 3.4, depth: 3}, this.scene);
+                innerChamber.position.y = -6.2; innerChamber.position.z = -4.5;
+                const darkMat = new BABYLON.StandardMaterial("darkMat", this.scene);
+                darkMat.diffuseColor = new BABYLON.Color3(0.02, 0.02, 0.02);
+                darkMat.sideOrientation = BABYLON.Mesh.BACKSIDE; 
+                innerChamber.material = darkMat;
+
                 const glassHeight = 11; const glassY = 5.5; 
                 const glassContainer = BABYLON.MeshBuilder.CreateBox("glassContainer", {width: 11, height: glassHeight, depth: 11}, this.scene);
-                glassContainer.position.y = glassY; 
-                glassContainer.material = this.materials.glass;
+                glassContainer.position.y = glassY; glassContainer.material = this.materials.glass;
                 
-                // Physics walls (Invisible)
+                const floor = BABYLON.MeshBuilder.CreateBox("gFloor", {width: 11, height: 1, depth: 11}, this.scene);
+                floor.position.y = -0.5; floor.visibility = 0;
+                floor.physicsImpostor = new BABYLON.PhysicsImpostor(floor, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0, restitution: 0.5 }, this.scene);
+                
                 const wallThick = 0.5;
-                const createWall = (name, w, h, d, x, y, z) => {
-                    const wMesh = BABYLON.MeshBuilder.CreateBox(name, {width: w, height: h, depth: d}, this.scene);
-                    wMesh.position.set(x, y, z); wMesh.visibility = 0;
-                    wMesh.physicsImpostor = new BABYLON.PhysicsImpostor(wMesh, BABYLON.PhysicsImpostor.BoxImpostor, {mass: 0}, this.scene);
-                };
-                createWall("w1", 11, glassHeight, wallThick, 0, glassY, 5.5);
-                createWall("w2", 11, glassHeight, wallThick, 0, glassY, -5.5);
-                createWall("w3", wallThick, glassHeight, 11, 5.5, glassY, 0);
-                createWall("w4", wallThick, glassHeight, 11, -5.5, glassY, 0);
-                createWall("floor", 11, 1, 11, 0, -0.5, 0);
+                const walls = [
+                    {pos: new BABYLON.Vector3(0, glassY, 5.5), size: {width: 11, height: glassHeight, depth: wallThick}},
+                    {pos: new BABYLON.Vector3(0, glassY, -5.5), size: {width: 11, height: glassHeight, depth: wallThick}},
+                    {pos: new BABYLON.Vector3(5.5, glassY, 0), size: {width: wallThick, height: glassHeight, depth: 11}},
+                    {pos: new BABYLON.Vector3(-5.5, glassY, 0), size: {width: wallThick, height: glassHeight, depth: 11}}
+                ];
+                walls.forEach((w, i) => {
+                    const mesh = BABYLON.MeshBuilder.CreateBox("w"+i, w.size, this.scene);
+                    mesh.position = w.pos; mesh.visibility = 0;
+                    mesh.physicsImpostor = new BABYLON.PhysicsImpostor(mesh, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0 }, this.scene);
+                });
 
                 const lid = BABYLON.MeshBuilder.CreateBox("lid", {width: 12.5, height: 1, depth: 12.5}, this.scene);
                 lid.position.y = 11.5; lid.material = this.materials.gold;
@@ -1046,8 +1100,10 @@
 
                 this.titleAnchor = new BABYLON.TransformNode("titleAnchor", this.scene);
                 this.titleAnchor.position = new BABYLON.Vector3(0, 11.3, 0); 
+
                 this.titleLeft = new BABYLON.TransformNode("titleLeft", this.scene);
                 this.titleLeft.position = new BABYLON.Vector3(-6, 11.3, 0);
+
                 this.titleRight = new BABYLON.TransformNode("titleRight", this.scene);
                 this.titleRight.position = new BABYLON.Vector3(6, 11.3, 0);
 
@@ -1062,8 +1118,8 @@
                 this.chuteDoor.material = this.materials.gold;
 
                 [[-6, -6], [6, -6], [6, 6], [-6, 6]].forEach((o) => {
-                    const strip = BABYLON.MeshBuilder.CreateBox("neon", {width: 0.3, height: baseHeight, depth: 0.3}, this.scene);
-                    strip.position.set(o[0], baseY, o[1]);
+                    const strip = BABYLON.MeshBuilder.CreateBox("neon_base", {width: 0.3, height: baseHeight, depth: 0.3}, this.scene);
+                    strip.position.x = o[0]; strip.position.z = o[1]; strip.position.y = baseY;
                     strip.material = this.materials.neon;
                 });
             }
@@ -1074,44 +1130,38 @@
                 const knobVis = new BABYLON.TransformNode("knobVis", this.scene);
                 knobVis.parent = knobRoot; knobVis.rotation.x = Math.PI / 2; 
 
-                // Reduce Cylinder Tesselation (64 -> 24)
-                const kCyl = BABYLON.MeshBuilder.CreateCylinder("kCyl", {diameter: 4, height: 1, tessellation: 24}, this.scene);
+                const kCyl = BABYLON.MeshBuilder.CreateCylinder("kCyl", {diameter: 4, height: 1, tessellation: 64}, this.scene);
                 kCyl.material = this.materials.knobGold; kCyl.parent = knobVis;
 
                 const qMarkNode = new BABYLON.TransformNode("qMark", this.scene);
                 qMarkNode.parent = knobVis; qMarkNode.position.y = 0.5;
-                
-                const qDot = BABYLON.MeshBuilder.CreateSphere("qDot", {diameter: 0.7, segments: 8}, this.scene); // Lower segments
+                const qDot = BABYLON.MeshBuilder.CreateSphere("qDot", {diameter: 0.7}, this.scene);
                 qDot.position.z = -1.2; qDot.scaling.y = 0.5; qDot.parent = qMarkNode; qDot.material = this.materials.knobGold;
-                
                 const qStem = BABYLON.MeshBuilder.CreateBox("qStem", {height: 0.8, width: 0.5, depth: 0.5}, this.scene);
                 qStem.position.z = -0.3; qStem.rotation.x = Math.PI/2; qStem.parent = qMarkNode; qStem.material = this.materials.knobGold;
 
-                // Pre-calculated low poly tube
                 const path = [];
-                for(let i = -20; i <= 200; i+=20) { // Lower resolution path
+                for(let i = -20; i <= 200; i+=10) {
                     const rad = BABYLON.Tools.ToRadians(i);
                     path.push(new BABYLON.Vector3(Math.cos(rad) * 0.9, 0, Math.sin(rad) * 0.9 + 0.8));
                 }
                 const qHook = BABYLON.MeshBuilder.CreateTube("qHook", {path: path, radius: 0.25, cap: BABYLON.Mesh.CAP_ALL}, this.scene);
                 qHook.rotation.x = Math.PI/2; qHook.parent = qMarkNode; qHook.material = this.materials.knobGold;
 
-                const kBev = BABYLON.MeshBuilder.CreateTorus("kBev", {diameter: 4, thickness: 0.4, tessellation: 24}, this.scene);
+                const kBev = BABYLON.MeshBuilder.CreateTorus("kBev", {diameter: 4, thickness: 0.4, tessellation: 64}, this.scene);
                 kBev.scaling.y = 0.5; kBev.position.y = 0.5; kBev.material = this.materials.knobGold; kBev.parent = knobVis;
-                
                 const kBar = BABYLON.MeshBuilder.CreateBox("kBar", {width: 5, height: 1.2, depth: 1.2}, this.scene);
                 kBar.position.y = 0.6; kBar.material = this.materials.knobGold; kBar.parent = knobVis;
 
-                // Action Manager only on the main Cylinder for performance
-                kCyl.actionManager = new BABYLON.ActionManager(this.scene);
-                kCyl.actionManager.registerAction(new BABYLON.ExecuteCodeAction(BABYLON.ActionManager.OnPointerOverTrigger, () => this.canvas.style.cursor = "pointer"));
-                kCyl.actionManager.registerAction(new BABYLON.ExecuteCodeAction(BABYLON.ActionManager.OnPointerOutTrigger, () => this.canvas.style.cursor = "default"));
-                
+                [kCyl, kBev, kBar, qDot, qStem, qHook].forEach(mesh => {
+                    mesh.actionManager = new BABYLON.ActionManager(this.scene);
+                    mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(BABYLON.ActionManager.OnPointerOverTrigger, () => this.canvas.style.cursor = "pointer"));
+                    mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(BABYLON.ActionManager.OnPointerOutTrigger, () => this.canvas.style.cursor = "default"));
+                });
                 this.knob = knobRoot;
             }
 
             createOrbitLights() {
-                // Reduce light count on mobile? No, keep them but maybe reduce range updates
                 const configs = [
                     { color: new BABYLON.Color3(1.0, 0.6, 0.1), radius: 18, y: 5, speed: 0.3, pulseSpeed: 1.5, offset: 0 }, 
                     { color: new BABYLON.Color3(1.0, 0.2, 0.2), radius: 22, y: -2, speed: -0.25, pulseSpeed: 2.0, offset: 1 }, 
@@ -1137,26 +1187,22 @@
             }
 
             createParticles() {
-                // Reduced particle count (1000 -> 300) for mobile
-                const pCount = this.isMobile ? 300 : 1000;
-                const p1 = new BABYLON.ParticleSystem("internalP", pCount, this.scene);
+                const p1 = new BABYLON.ParticleSystem("internalP", 1000, this.scene);
                 p1.particleTexture = new BABYLON.Texture(this.flareUrl, this.scene);
                 p1.emitter = new BABYLON.Vector3(0, 5, 0);
                 p1.minEmitBox = new BABYLON.Vector3(-5, -4, -5); p1.maxEmitBox = new BABYLON.Vector3(5, 5, 5);
                 p1.color1 = new BABYLON.Color4(1, 0.9, 0.5, 0.8); 
                 p1.color2 = new BABYLON.Color4(1, 0.6, 0.1, 0.2); 
-                p1.minSize = 0.1; p1.maxSize = 0.3; p1.emitRate = this.isMobile ? 30 : 100; p1.start();
+                p1.minSize = 0.1; p1.maxSize = 0.3; p1.emitRate = 100; p1.start();
 
-                // Background particles
-                const bgCount = this.isMobile ? 400 : 1500;
-                const p2 = new BABYLON.ParticleSystem("bgP", bgCount, this.scene);
+                const p2 = new BABYLON.ParticleSystem("bgP", 1500, this.scene);
                 p2.particleTexture = new BABYLON.Texture(this.flareUrl, this.scene);
                 p2.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
                 p2.emitter = new BABYLON.Vector3(0, 0, 20); 
                 p2.minEmitBox = new BABYLON.Vector3(-50, -40, 0); p2.maxEmitBox = new BABYLON.Vector3(50, 50, 0);
                 p2.color1 = new BABYLON.Color4(0.6, 0.3, 1.0, 1.0); 
                 p2.color2 = new BABYLON.Color4(0.8, 0.5, 1.0, 0.0); 
-                p2.minSize = 1.0; p2.maxSize = 3.0; p2.emitRate = this.isMobile ? 20 : 50;
+                p2.minSize = 1.0; p2.maxSize = 3.0; p2.emitRate = 50;
                 p2.direction1 = new BABYLON.Vector3(-0.5, 0.5, 0); p2.direction2 = new BABYLON.Vector3(0.5, -0.5, 0);
                 p2.gravity = new BABYLON.Vector3(0, 0.01, 0);
                 p2.renderingGroupId = 0; 
@@ -1164,7 +1210,7 @@
             }
 
             createChuteParticles() {
-                const ps = new BABYLON.ParticleSystem("chuteMist", this.isMobile ? 300 : 800, this.scene);
+                const ps = new BABYLON.ParticleSystem("chuteMist", 800, this.scene);
                 ps.particleTexture = new BABYLON.Texture(this.flareUrl, this.scene);
                 ps.emitter = new BABYLON.Vector3(0, -7.0, -6.0); 
                 ps.minEmitBox = new BABYLON.Vector3(-2, 0, 0); ps.maxEmitBox = new BABYLON.Vector3(2, 2.0, 0);
@@ -1180,14 +1226,11 @@
             }
 
             createCapsules(shadowGen) {
-                const floorMesh = this.scene.getMeshByName("floor");
+                const floorMesh = this.scene.getMeshByName("gFloor");
                 const config = GAME_MODES[this.currentMode].capsule; 
-                const count = this.isMobile ? 15 : 20; // Slightly fewer capsules on mobile
 
-                for (let i = 0; i < count; i++) {
-                    // ★★★ OPTIMIZATION 5: REDUCE GEOMETRY ★★★
-                    // Sphere segments 32 -> 16 (Visually fine for small objects)
-                    const capsule = BABYLON.MeshBuilder.CreateSphere("cap_" + i, {diameter: 2.5, segments: 16}, this.scene);
+                for (let i = 0; i < 20; i++) {
+                    const capsule = BABYLON.MeshBuilder.CreateSphere("cap_" + Date.now() + "_" + i, {diameter: 2.5}, this.scene);
                     
                     const genData = config.generate(this.scene, { pokeballTexture: this.pokeballTexture });
                     capsule.metadata = genData.metadata;
@@ -1197,8 +1240,6 @@
                     mat.metallic = config.matProps.metallic;
                     mat.roughness = config.matProps.roughness;
                     mat.environmentIntensity = config.matProps.envIntensity;
-                    // Freeze material for performance
-                    mat.freeze();
                     capsule.material = mat;
 
                     capsule.position = new BABYLON.Vector3((Math.random() - 0.5) * 9, 2 + Math.random() * 6, (Math.random() - 0.5) * 9);
@@ -1208,11 +1249,12 @@
                     shadowGen.addShadowCaster(capsule);
                     this.capsules.push(capsule);
 
-                    // Simplified collision check
                     const collideList = [];
                     if (floorMesh && floorMesh.physicsImpostor) collideList.push(floorMesh.physicsImpostor);
-                    
-                    // Only collide sound with floor to save CPU
+                    this.capsules.forEach(c => {
+                        if (c !== capsule && c.physicsImpostor) collideList.push(c.physicsImpostor);
+                    });
+
                     capsule.physicsImpostor.registerOnPhysicsCollide(collideList, (main, collided) => {
                         const v = main.getLinearVelocity();
                         if (v && v.length() > 3.0) this.audio.playCollisionSound();
@@ -1232,7 +1274,10 @@
 
             setupEvents() {
                 window.addEventListener('keydown', (e) => {
-                    if (e.key.toLowerCase() === 'v') this.toggleBackground();
+                    if (e.key.toLowerCase() === 'v') {
+                        this.toggleBackground();
+                    }
+                    // Removed 'm' menu key binding
                 });
 
                 const btnBg = document.getElementById("btnToggleBg");
@@ -1243,6 +1288,8 @@
                         this.toggleBackground();
                     });
                 }
+
+                // Removed btnToggleMenu event listener
 
                 const refillBtn = document.getElementById("refillBtn");
                 refillBtn.addEventListener("click", () => {
@@ -1255,11 +1302,13 @@
                     const rImg = document.getElementById("rewardImage");
                     rImg.classList.remove("anim-reveal"); 
                     rImg.classList.remove("anim-reveal-clean");
+                    rImg.classList.remove("anim-star-epic");
 
                     if (this.tempCapsule) { this.tempCapsule.dispose(); this.tempCapsule = null; }
                     setTimeout(() => {
                          rImg.src = "";
                          this.pendingRewardImage = null; 
+                         // ★★★ 關鍵修改：只有當膠囊數量為 0 時，且按下再玩一次，才會出現補蛋按鈕 ★★★
                          if (this.capsules.length === 0) refillBtn.style.display = "block";
                     }, 500);
                     if (this.chuteDoor && this.chuteDoor.position.y < -6.1) {
@@ -1270,9 +1319,8 @@
                 this.scene.onPointerObservable.add((pointerInfo) => {
                     if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERDOWN && pointerInfo.pickInfo.hit && pointerInfo.pickInfo.pickedMesh) {
                         let mesh = pointerInfo.pickInfo.pickedMesh;
-                        // Search up tree
                         while(mesh) {
-                            if (mesh.name === "knobRoot" || mesh.parent?.name === "knobRoot" || mesh.name === "kCyl") {
+                            if (mesh.name === "knobRoot" || mesh.parent?.name === "knobRoot") {
                                 this.spin();
                                 break;
                             }
@@ -1308,6 +1356,7 @@
 
             getReward() {
                 let data = GAME_MODES[this.currentMode].data;
+                
                 if (this.history.size >= Math.min(this.maxHistory, data.length)) this.history.clear();
                 let available = data.filter(p => !this.history.has(p.name));
                 if (available.length === 0) { this.history.clear(); available = data; }
@@ -1358,6 +1407,7 @@
 
                     setTimeout(() => {
                         this.playExitAnimation(reward, capsuleData);
+                        
                         setTimeout(() => {
                             if (this.chuteParticles) this.chuteParticles.stop();
                             BABYLON.Animation.CreateAndStartAnimation("lightDown", this.chuteLight, "intensity", 60, 30, 8, 0, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
@@ -1375,35 +1425,53 @@
 
                 const config = GAME_MODES[this.currentMode].capsule;
 
+                let topColor = new BABYLON.Color3(0.9, 0.05, 0.1); 
+                let botColor = BABYLON.Color3.White();
+                
+                if (capsuleData && capsuleData.topColor) {
+                    topColor = capsuleData.topColor;
+                    botColor = capsuleData.botColor;
+                }
+
                 const topMat = new BABYLON.PBRMaterial("pTop", this.scene);
-                topMat.albedoColor = new BABYLON.Color3(0.9, 0.05, 0.1);
-                topMat.metallic = config.exitMat.metallic; topMat.roughness = config.exitMat.roughness;  
+                topMat.albedoColor = topColor; 
+                topMat.metallic = config.exitMat.metallic;   
+                topMat.roughness = config.exitMat.roughness;  
                 topMat.environmentIntensity = config.exitMat.envIntensity; 
+                topMat.backFaceCulling = false;
                 
                 const botMat = new BABYLON.PBRMaterial("pBot", this.scene);
-                botMat.albedoColor = BABYLON.Color3.White(); 
-                botMat.metallic = config.exitMat.metallic; botMat.roughness = config.exitMat.roughness; 
+                botMat.albedoColor = botColor; 
+                botMat.metallic = config.exitMat.metallic; 
+                botMat.roughness = config.exitMat.roughness; 
                 botMat.environmentIntensity = config.exitMat.envIntensity; 
+                botMat.backFaceCulling = false;
 
-                const top = BABYLON.MeshBuilder.CreateSphere("top", {diameter: 2.5, slice: 0.5, segments: 24}, this.scene);
+                const top = BABYLON.MeshBuilder.CreateSphere("top", {diameter: 2.5, slice: 0.5}, this.scene);
                 top.material = topMat; top.parent = parent;
-                const bottom = BABYLON.MeshBuilder.CreateSphere("bottom", {diameter: 2.5, slice: 0.5, segments: 24}, this.scene);
+                const bottom = BABYLON.MeshBuilder.CreateSphere("bottom", {diameter: 2.5, slice: 0.5}, this.scene);
                 bottom.rotation.x = Math.PI; bottom.material = botMat; bottom.parent = parent;
 
                 let ring, btn;
                 if (config.hasDetails) {
                     const blackMat = new BABYLON.PBRMaterial("pBlack", this.scene);
                     blackMat.albedoColor = new BABYLON.Color3(0.1, 0.1, 0.1); blackMat.metallic = 0.1; blackMat.roughness = 0.3;
-                    ring = BABYLON.MeshBuilder.CreateTorus("ring", {diameter: 2.5, thickness: 0.15, tessellation: 24}, this.scene);
+                    
+                    ring = BABYLON.MeshBuilder.CreateTorus("ring", {diameter: 2.5, thickness: 0.15}, this.scene);
                     ring.material = blackMat; ring.parent = parent;
-                    btn = BABYLON.MeshBuilder.CreateCylinder("btn", {diameter: 0.6, height: 0.2, tessellation: 16}, this.scene);
+                    
+                    btn = BABYLON.MeshBuilder.CreateCylinder("btn", {diameter: 0.6, height: 0.2}, this.scene);
                     btn.rotation.x = Math.PI/2; btn.position.z = 1.2; btn.material = botMat; btn.parent = parent;
+                    
                     ring.renderingGroupId = 1; btn.renderingGroupId = 1;
                 }
+                
                 top.renderingGroupId = 1; bottom.renderingGroupId = 1;
 
                 const ballLight = new BABYLON.PointLight("ballLight", new BABYLON.Vector3(0,0,0), this.scene);
-                ballLight.parent = parent; ballLight.intensity = 0; ballLight.diffuse = new BABYLON.Color3(1, 0.8, 0.4);
+                ballLight.parent = parent; 
+                ballLight.intensity = 0; 
+                ballLight.diffuse = new BABYLON.Color3(1, 0.8, 0.4);
 
                 this.tempCapsule = parent;
                 const targetPos = new BABYLON.Vector3(0, 3.3, -12);
@@ -1416,6 +1484,7 @@
                     const shakeAnim = new BABYLON.Animation("shake", "rotation.z", 60, BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CYCLE);
                     const shakeKeys = []; for(let i=0; i<=20; i++) shakeKeys.push({ frame: i, value: Math.sin(i) * 0.2 });
                     shakeAnim.setKeys(shakeKeys);
+                    
                     const lightAnim = new BABYLON.Animation("glow", "intensity", 60, BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
                     lightAnim.setKeys([{frame: 0, value: 0}, {frame: 20, value: 1.0}]);
 
@@ -1427,8 +1496,12 @@
                         this.scene.stopAnimation(parent);
                         parent.rotation.z = 0;
                         this.audio.playOpenSound();
-                        if (ring) ring.isVisible = false; if (btn) btn.isVisible = false;
-                        const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+                        
+                        if (ring) ring.isVisible = false; 
+                        if (btn) btn.isVisible = false;
+
+                        const ease = new BABYLON.CubicEase();
+                        ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
 
                         BABYLON.Animation.CreateAndStartAnimation("openTop", top, "position.y", 60, 30, 0, 2.5, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
                         BABYLON.Animation.CreateAndStartAnimation("openBot", bottom, "position.y", 60, 30, 0, -2.5, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
@@ -1441,11 +1514,21 @@
                             this.hasShownReward = true;
                             this.showReward(reward);
                         };
+
                         this.hasShownReward = false; 
+
                         if (this.pendingRewardImage) {
-                            if (this.pendingRewardImage.complete) show();
-                            else { this.pendingRewardImage.onload = show; this.pendingRewardImage.onerror = show; setTimeout(show, 2000); }
-                        } else show();
+                            if (this.pendingRewardImage.complete) {
+                                show();
+                            } else {
+                                this.pendingRewardImage.onload = show;
+                                this.pendingRewardImage.onerror = show;
+                                setTimeout(show, 2000); 
+                            }
+                        } else {
+                            show();
+                        }
+
                         this.isSpinning = false;
                     }, 800);
                 }, 1500);
@@ -1458,19 +1541,23 @@
                 const enNameEl = document.getElementById("englishName");
 
                 img.src = reward.url;
+                
                 const config = GAME_MODES[this.currentMode].ui;
 
                 if (config.showText) {
-                    name.style.display = 'block'; enNameEl.style.display = 'block';
+                    name.style.display = 'block';
+                    enNameEl.style.display = 'block';
                     name.innerText = reward.name.split(' ')[0]; 
                     const match = reward.name.match(/\((.*?)\)/);
                     enNameEl.innerText = match ? match[1].toUpperCase() : "POKEMON";
                 } else {
-                    name.style.display = 'none'; enNameEl.style.display = 'none'; 
+                    name.style.display = 'none';      
+                    enNameEl.style.display = 'none'; 
                 }
 
                 img.className = "relative w-full h-full object-contain"; 
                 img.classList.add(config.animClass);
+
                 overlay.classList.replace("overlay-hidden", "overlay-visible");
                 this.audio.playWinSound();
                 if (navigator.vibrate) navigator.vibrate(500);
@@ -1480,6 +1567,7 @@
         window.addEventListener('DOMContentLoaded', () => {
             new GachaGame();
         });
+
     </script>
 </body>
 </html>
