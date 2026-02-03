@@ -107,7 +107,7 @@
             box-shadow: 0 0 30px rgba(220, 38, 38, 0.6);
             cursor: pointer;
             transition: all 0.2s ease;
-            display: none;
+            display: none; /* 預設隱藏，程式控制顯示 */
         }
         #refillBtn:hover {
             background: rgba(185, 28, 28, 1);
@@ -407,7 +407,7 @@
 
     <div class="mobile-controls">
         <button id="btnToggleBg" class="control-btn">背景</button>
-        </div>
+    </div>
 
     <button id="refillBtn">補充滿滿的扭蛋</button>
 
@@ -559,7 +559,7 @@
 {name:"噗隆隆 (Varoom)",url:"https://assets.pokemon.com/assets/cms2/img/pokedex/detail/965.png"}
         ];
 
-        // ★★★ GAME CONFIGURATION (MODES) - Simplified to POKEMON Only ★★★
+        // ★★★ GAME CONFIGURATION (MODES) - POKEMON Only ★★★
         const GAME_MODES = {
             POKEMON: {
                 id: 'POKEMON',
@@ -1308,6 +1308,7 @@
                     setTimeout(() => {
                          rImg.src = "";
                          this.pendingRewardImage = null; 
+                         // ★★★ 關鍵修改：只有當膠囊數量為 0 時，且按下再玩一次，才會出現補蛋按鈕 ★★★
                          if (this.capsules.length === 0) refillBtn.style.display = "block";
                     }, 500);
                     if (this.chuteDoor && this.chuteDoor.position.y < -6.1) {
@@ -1328,8 +1329,6 @@
                     }
                 });
             }
-            
-            // Removed setMode() as it is no longer needed
             
             clearCapsules() {
                 this.capsules.forEach(c => {
